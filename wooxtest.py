@@ -34,7 +34,13 @@ def fetch_bybit_order_book(symbol):
     """
     Fetch order book data from Bybit.
     """
+    # Check rate limit before making API request
+    while is_rate_limit_exceeded():
+        time.sleep(0.1)  # Sleep for 100ms and check again
+
     response = bybit_session.get_orderbook(category="linear", symbol=symbol)
+    print("Bybit Response:", response)  # Debugging line
+
     if response["retCode"] == 0:
         order_book = {
             'bids': [{'price': float(bid[0]), 'quantity': float(bid[1])} for bid in response["result"]["b"]],
@@ -42,6 +48,7 @@ def fetch_bybit_order_book(symbol):
         }
         return order_book
     else:
+        print("Error fetching Bybit data:", response["retMsg"])  # Debugging line
         return {"success": False, "error": response["retMsg"]}
 
 
@@ -84,20 +91,39 @@ def simulate_market_buy(order_book, order_size):
     return total_quantity, average_price
 
 
-# Load pairs from the file
+# Load pairs from files
 with open("woox_pairs.txt", "r") as file:
-    pairs = [pair.strip() for pair in file.readlines()]
+    woo_pairs = [pair.strip() for pair in file.readlines()]
+
+with open("bybit_perps.txt", "r") as file:
+    bybit_pairs = [pair.strip() for pair in file.readlines()]
 
 # Streamlit UI
 st.title('Market Buy Simulator')
 
 exchange = st.selectbox("Select an exchange:", ["Woo Network", "Bybit"])
-selected_symbol = st.selectbox("Select a trading pair:", pairs)  # Ensure pairs list includes Bybit pairs
+
+# Dynamically load pairs based on the selected exchange
+if exchange == "Woo Network":
+    selected_pairs = woo_pairs
+elif exchange == "Bybit":
+    selected_pairs = bybit_pairs
+
+selected_symbol = st.selectbox("Select a trading pair:", selected_pairs)
 
 order_size = st.number_input("Enter Order Size ($):", min_value=0.0, step=50.0)
 
 # Fee input field
-fee_percentage = st.number_input("Fees (%):", value=0.03, step=0.01)
+if exchange == "Bybit":
+    fee_input = st.text_input("Fees (%):", value="0.055")
+    try:
+        fee_percentage = float(fee_input)
+    except ValueError:
+        st.warning("Please enter a valid fee percentage.")
+        fee_percentage = 0.055  # default value in case of invalid input
+else:
+    fee_percentage = st.number_input("Fees (%):", value=0.03, step=0.01)
+
 
 if st.button('Simulate Market Buy'):
     # Fetching order book data based on selected exchange
@@ -107,12 +133,11 @@ if st.button('Simulate Market Buy'):
         order_book = fetch_bybit_order_book(selected_symbol)
 
     # If order book fetch is successful, display it
-    if order_book:
+    if order_book and 'bids' in order_book and 'asks' in order_book:
         top_n = 10  # Show top 10 bids and asks
         bids_data = order_book['bids'][:top_n]
         asks_data = order_book['asks'][:top_n]
 
-        # Collapsible Live Order Book section
         with st.expander("Live Order Book", expanded=False):
             col1, col2 = st.columns(2)
 
@@ -124,7 +149,12 @@ if st.button('Simulate Market Buy'):
                 st.write("Asks")
                 st.table(asks_data)
 
-    if order_book and order_book.get("success"):
+        last_traded_price = order_book['bids'][0]['price']
+        bought_quantity, avg_price = simulate_market_buy(order_book, order_size)
+
+    # if order_book and order_book.get("success"):
+    if order_book and 'bids' in order_book and 'asks' in order_book:
+
         last_traded_price = order_book['bids'][0]['price']
         bought_quantity, avg_price = simulate_market_buy(order_book, order_size)
 
@@ -133,19 +163,32 @@ if st.button('Simulate Market Buy'):
         spread = lowest_ask_price - last_traded_price
 
         # Calculate slippage
+        print(f'avg_price: {avg_price}, last_traded_price: {last_traded_price}')
         slippage = avg_price - last_traded_price
+        print(f'slippage: {slippage}')
+
+        # Calculate fee amount
+        print(f'fee_percentage: {fee_percentage}, order_size: {order_size}')
         fee_amount = (fee_percentage / 100) * order_size
+        print(f'fee_amount: {fee_amount}')
 
         # Adjusting the slippage and spread calculations
+        print(f'slippage: {slippage}, bought_quantity: {bought_quantity}')
         total_slippage_cost = slippage * bought_quantity
+        print(f'total_slippage_cost: {total_slippage_cost}')
+
+        print(f'spread: {spread}, bought_quantity: {bought_quantity}')
         total_spread_cost = spread * bought_quantity
+        print(f'total_spread_cost: {total_spread_cost}')
+
         total_cost = fee_amount + total_slippage_cost + total_spread_cost
+        print(f'total_cost: {total_cost}')
 
         # Display the results
         st.write(f'Quantity Bought: {round(bought_quantity, 3)}')
         st.write(f'Average Price: ${round(avg_price, 4)}')
         st.write(f'Total Slippage Cost: ${round(total_slippage_cost, 6)}')
-        st.write(f'Fee Amount: ${round(fee_amount, 5)}')
+        st.write(f'Fee Amount: ${fee_amount}')
         st.write(f'Total Spread Cost: ${round(total_spread_cost, 6)}')
         st.markdown(f'**Total Cost of Trade: ${round(total_cost, 6)}**')
 
