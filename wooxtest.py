@@ -106,24 +106,23 @@ if st.button('Simulate Market Buy'):
     elif exchange == "Bybit":
         order_book = fetch_bybit_order_book(selected_symbol)
 
-    # Displaying the live order book
+    # If order book fetch is successful, display it
     if order_book:
         top_n = 10  # Show top 10 bids and asks
         bids_data = order_book['bids'][:top_n]
         asks_data = order_book['asks'][:top_n]
 
-        st.write("### Live Order Book")
+        # Collapsible Live Order Book section
+        with st.expander("Live Order Book", expanded=False):
+            col1, col2 = st.columns(2)
 
-        # Creating columns for side by side display
-        col1, col2 = st.columns(2)
+            with col1:
+                st.write("Bids")
+                st.table(bids_data)
 
-        with col1:
-            st.write("#### Bids")
-            st.table(bids_data)
-
-        with col2:
-            st.write("#### Asks")
-            st.table(asks_data)
+            with col2:
+                st.write("Asks")
+                st.table(asks_data)
 
     if order_book and order_book.get("success"):
         last_traded_price = order_book['bids'][0]['price']
@@ -148,7 +147,7 @@ if st.button('Simulate Market Buy'):
         st.write(f'Total Slippage Cost: ${round(total_slippage_cost, 6)}')
         st.write(f'Fee Amount: ${round(fee_amount, 5)}')
         st.write(f'Total Spread Cost: ${round(total_spread_cost, 6)}')
-        st.write(f'Total Cost of Trade: ${round(total_cost, 6)}')
+        st.markdown(f'**Total Cost of Trade: ${round(total_cost, 6)}**')
 
 
     else:
