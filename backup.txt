@@ -113,7 +113,81 @@ def fetch_order_book(symbol):
         # Improved error handling
         return {"success": False, "error": f"Received status code: {response.status_code}"}
 
-def display_order_book_results(order_book, order_size, fee_percentage):
+
+def simulate_market_buy(order_book, order_size):
+    total_spent = 0
+    total_quantity = 0
+
+    # Check if the order book is valid
+    if not order_book or 'asks' not in order_book:
+        return 0, 0
+
+    for ask in order_book['asks']:
+        if total_spent < order_size:
+            price = ask['price']
+            quantity = ask['quantity']
+            cost = price * quantity
+
+            if total_spent + cost <= order_size:
+                total_spent += cost
+                total_quantity += quantity
+            else:
+                remaining_budget = order_size - total_spent
+                quantity_to_buy = remaining_budget / price
+                total_spent += quantity_to_buy * price
+                total_quantity += quantity_to_buy
+
+    average_price = total_spent / total_quantity if total_quantity > 0 else 0
+    return total_quantity, average_price
+
+
+
+# Load pairs from files
+with open("woox_pairs.txt", "r") as file:
+    woo_pairs = [pair.strip() for pair in file.readlines()]
+
+with open("bybit_perps.txt", "r") as file:
+    bybit_pairs = [pair.strip() for pair in file.readlines()]
+
+# Streamlit UI
+st.title('Market Buy Simulator')
+
+exchange = st.selectbox("Select an exchange:", ["Woo Network", "Bybit"])
+
+# Dynamically load pairs based on the selected exchange
+if exchange == "Woo Network":
+    selected_pairs = woo_pairs
+elif exchange == "Bybit":
+    selected_pairs = bybit_pairs
+
+selected_symbol = st.selectbox("Select a trading pair:", selected_pairs)
+
+order_size = st.number_input("Enter Order Size ($):", min_value=0.0, step=50.0)
+
+# Fee input field
+if exchange == "Bybit":
+    fee_input = st.text_input("Fees (%):", value="0.055")
+    try:
+        fee_percentage = float(fee_input)
+    except ValueError:
+        st.warning("Please enter a valid fee percentage.")
+        fee_percentage = 0.055  # default value in case of invalid input
+else:
+    fee_percentage = st.number_input("Fees (%):", value=0.03, step=0.01)
+
+if st.button('Simulate Market Buy'):
+    order_book = None  # Initialize order_book to None
+
+    if exchange == "Bybit":
+        websocket_manager.set_symbol(selected_symbol)  # Update this line
+        websocket_manager.data_event.clear()  # Clear the event before starting
+        websocket_manager.start()
+        websocket_manager.data_event.wait(1)  # Wait for up to 10 seconds for the event to be set
+        order_book = websocket_manager.get_order_book()
+        websocket_manager.stop()
+    elif exchange == "Woo Network":
+        order_book = fetch_order_book(selected_symbol)
+
     # If order book fetch is successful, display it
     if order_book and 'bids' in order_book and 'asks' in order_book:
         top_n = 10  # Show top 10 bids and asks
@@ -157,85 +231,6 @@ def display_order_book_results(order_book, order_size, fee_percentage):
         st.markdown(f'**Total Cost of Trade: ${round(total_cost, 6)}**')
     else:
         st.write("Failed to fetch or display the order book.")
-
-
-def simulate_market_buy(order_book, order_size):
-    total_spent = 0
-    total_quantity = 0
-
-    # Check if the order book is valid
-    if not order_book or 'asks' not in order_book:
-        return 0, 0
-
-    for ask in order_book['asks']:
-        if total_spent < order_size:
-            price = ask['price']
-            quantity = ask['quantity']
-            cost = price * quantity
-
-            if total_spent + cost <= order_size:
-                total_spent += cost
-                total_quantity += quantity
-            else:
-                remaining_budget = order_size - total_spent
-                quantity_to_buy = remaining_budget / price
-                total_spent += quantity_to_buy * price
-                total_quantity += quantity_to_buy
-
-    average_price = total_spent / total_quantity if total_quantity > 0 else 0
-    return total_quantity, average_price
-
-
-
-# Load pairs from files
-with open("woox_pairs.txt", "r") as file:
-    woo_pairs = [pair.strip() for pair in file.readlines()]
-
-with open("bybit_perps.txt", "r") as file:
-    bybit_pairs = [pair.strip() for pair in file.readlines()]
-
-# Streamlit UI
-st.title('Market Buy Simulator')
-
-col1, col2 = st.columns(2)
-
-with col1:
-    # Woo Network Exchange UI
-    st.write("### Woo Network")
-    selected_symbol_woo = st.selectbox("Select a trading pair:", woo_pairs, key="woo_select")
-    order_size_woo = st.number_input("Enter Order Size ($):", min_value=0.0, step=100.0, key="woo_order_size")
-    fee_percentage_woo = st.number_input("Fees (%):", value=0.03, step=0.01, key="woo_fee")
-
-with col2:
-    # Bybit Exchange UI
-    st.write("### Bybit")
-    selected_symbol_bybit = st.selectbox("Select a trading pair:", bybit_pairs, key="bybit_select")
-    order_size_bybit = st.number_input("Enter Order Size ($):", min_value=0.0, step=100.0, key="bybit_order_size")
-    fee_input_bybit = st.text_input("Fees (%):", value="0.055", key="bybit_fee")
-    try:
-        fee_percentage_bybit = float(fee_input_bybit)
-    except ValueError:
-        st.warning("Please enter a valid fee percentage for Bybit.")
-        fee_percentage_bybit = 0.055  # default value in case of invalid input
-
-# Combined button for both exchanges
-if st.button('Simulate Market Buys for Both Exchanges'):
-    # Woo Network
-    order_book_woo = fetch_order_book(selected_symbol_woo)
-    with col1:
-        display_order_book_results(order_book_woo, order_size_woo, fee_percentage_woo)
-
-    # Bybit
-    websocket_manager.set_symbol(selected_symbol_bybit)
-    websocket_manager.data_event.clear()
-    websocket_manager.start()
-    websocket_manager.data_event.wait(1)
-    order_book_bybit = websocket_manager.get_order_book()
-    websocket_manager.stop()
-    with col2:
-        display_order_book_results(order_book_bybit, order_size_bybit, fee_percentage_bybit)
-
-
 
 
 
