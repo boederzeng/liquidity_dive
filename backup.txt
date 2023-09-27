@@ -8,6 +8,55 @@ from pybit.unified_trading import HTTP
 from pybit.unified_trading import WebSocket
 from time import sleep
 
+
+class BinanceWebSocketManager:
+    def __init__(self, symbol="BTCUSDT"):
+        self.base_url = "wss://fstream.binance.com/ws/"
+        self.symbol = symbol.lower()
+        self.ws = None
+        self.order_book_text = ""
+        self.data_event = threading.Event()  # Add an event for data synchronization
+
+    def handle_message(self, message):
+        data = json.loads(message)
+        if 'e' in data and data['e'] == 'depthUpdate':
+            bids = data['b'][:20]
+            asks = data['a'][:20]
+
+            # Format bids and asks
+            formatted_bids = ['BID: {} @ {}'.format(float(bid[0]), float(bid[1])) for bid in bids]
+            formatted_asks = ['ASK: {} @ {}'.format(float(ask[0]), float(ask[1])) for ask in asks]
+
+            # Adjusted the order here: asks first, then bids
+            self.order_book_text = '\n'.join(formatted_asks + [''] + formatted_bids)
+            self.data_event.set()
+
+    def start(self):
+        self.ws = websocket.WebSocketApp(self.base_url + self.symbol + "@depth",
+                                         on_message=lambda ws, message: self.handle_message(message))
+        threading.Thread(target=self.ws.run_forever).start()
+
+    def stop(self):
+        if self.ws:
+            self.ws.close()
+
+    def get_order_book(self):
+        if self.order_book_text:
+            return self.order_book_text
+        return None
+
+    def set_symbol(self, symbol):
+        if self.symbol != symbol.lower():
+            self.symbol = symbol.lower()
+            self.order_book_text = ""
+            if self.ws:
+                self.stop()
+            self.start()
+
+binance_websocket_manager = BinanceWebSocketManager(symbol="BTCUSDT")
+
+def get_binance_websocket_manager():
+    return binance_websocket_manager
 class BybitWebSocketManager:
     def __init__(self, testnet=True, symbol="BTCUSDT"):
         self.ws = WebSocket(testnet=testnet, channel_type="linear")
@@ -113,6 +162,70 @@ def fetch_order_book(symbol):
         # Improved error handling
         return {"success": False, "error": f"Received status code: {response.status_code}"}
 
+def fetch_binance_order_book(symbol):
+    binance_websocket_manager.set_symbol(symbol)
+    binance_websocket_manager.data_event.clear()
+    binance_websocket_manager.start()
+    binance_websocket_manager.data_event.wait(1)
+    order_book = binance_websocket_manager.get_order_book()
+    binance_websocket_manager.stop()
+    return order_book
+
+
+def display_order_book_results(order_book, order_size, fee_percentage):
+    # If order book fetch is successful, display it
+    if order_book and 'bids' in order_book and 'asks' in order_book:
+        top_n = 10  # Show top 10 bids and asks
+        bids_data = order_book['bids'][:top_n]
+        asks_data = order_book['asks'][:top_n]
+
+        with st.expander("Live Order Book", expanded=False):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write("Bids")
+                st.table(bids_data)
+
+            with col2:
+                st.write("Asks")
+                st.table(asks_data)
+
+        last_traded_price = order_book['bids'][0]['price']
+        bought_quantity, avg_price = simulate_market_buy(order_book, order_size)
+
+        lowest_ask_price = order_book['asks'][0]['price']
+        spread = lowest_ask_price - last_traded_price
+
+        # Calculate slippage
+        slippage = avg_price - last_traded_price
+
+        # Calculate fee amount
+        fee_amount = (fee_percentage / 100) * order_size
+
+        # Adjusting the slippage and spread calculations
+        total_slippage_cost = slippage * bought_quantity
+        total_spread_cost = spread * bought_quantity
+        total_cost = fee_amount + total_slippage_cost + total_spread_cost
+
+        # Calculate the average liquidity for the top 20 bids and asks
+        top_n_ticks = 20
+        avg_liquidity_bids = sum([bid['quantity'] for bid in order_book['bids'][:top_n_ticks]]) / top_n_ticks
+        avg_liquidity_asks = sum([ask['quantity'] for ask in order_book['asks'][:top_n_ticks]]) / top_n_ticks
+
+        avg_liquidity = (avg_liquidity_bids + avg_liquidity_asks) / 2
+
+        # Display the results
+        with st.expander("Trade Details", expanded=False):
+            st.write(f'Average Order Book Liquidity 20Ticks: {round(avg_liquidity, 3)}')
+            st.write(f'Quantity Bought: {round(bought_quantity, 3)}')
+            st.write(f'Average Price: ${round(avg_price, 4)}')
+            st.write(f'Total Slippage Cost: ${round(total_slippage_cost, 6)}')
+            st.write(f'Fee Amount: ${fee_amount}')
+            st.write(f'Total Spread Cost: ${round(total_spread_cost, 6)}')
+        st.markdown(f'**Total Cost of Trade: ${round(total_cost, 6)}**')
+    else:
+        st.write("Failed to fetch or display the order book.")
+
 
 def simulate_market_buy(order_book, order_size):
     total_spent = 0
@@ -148,102 +261,70 @@ with open("woox_pairs.txt", "r") as file:
 
 with open("bybit_perps.txt", "r") as file:
     bybit_pairs = [pair.strip() for pair in file.readlines()]
+with open("binance_perps.txt", "r") as file:
+    binance_pairs = [pair.strip() for pair in file.readlines()]
 
 # Streamlit UI
 st.title('Market Buy Simulator')
 
-exchange = st.selectbox("Select an exchange:", ["Woo Network", "Bybit"])
+col1, col2, col3 = st.columns(3)
 
-# Dynamically load pairs based on the selected exchange
-if exchange == "Woo Network":
-    selected_pairs = woo_pairs
-elif exchange == "Bybit":
-    selected_pairs = bybit_pairs
+with col1:
+    # Woo Network Exchange UI
+    st.write("### Woo Network")
+    selected_symbol_woo = st.selectbox("Select a trading pair:", woo_pairs, key="woo_select")
+    order_size_woo = st.number_input("Enter Order Size ($):", value=5000.0, min_value=0.0, step=100.0,
+                                     key="woo_order_size")
 
-selected_symbol = st.selectbox("Select a trading pair:", selected_pairs)
-
-order_size = st.number_input("Enter Order Size ($):", min_value=0.0, step=50.0)
-
-# Fee input field
-if exchange == "Bybit":
-    fee_input = st.text_input("Fees (%):", value="0.055")
+    fee_input_woo = st.text_input("Taker Fee (%):", value="0.015", key="woo_fee")
     try:
-        fee_percentage = float(fee_input)
+        fee_percentage_woo = float(fee_input_woo)
     except ValueError:
-        st.warning("Please enter a valid fee percentage.")
-        fee_percentage = 0.055  # default value in case of invalid input
-else:
-    fee_percentage = st.number_input("Fees (%):", value=0.03, step=0.01)
+        st.warning("Please enter a valid fee percentage for Woo Network.")
+        fee_percentage_woo = 0.015  # default value in case of invalid input
 
-if st.button('Simulate Market Buy'):
-    order_book = None  # Initialize order_book to None
+with col2:
+    # Bybit Exchange UI
+    st.write("### Bybit")
+    selected_symbol_bybit = st.selectbox("Select a trading pair:", bybit_pairs, key="bybit_select")
+    order_size_bybit = st.number_input("Enter Order Size ($):", value=5000.0, min_value=0.0, step=100.0, key="bybit_order_size")
+    fee_input_bybit = st.text_input("Taker Fee (%):", value="0.055", key="bybit_fee")
+    try:
+        fee_percentage_bybit = float(fee_input_bybit)
+    except ValueError:
+        st.warning("Please enter a valid fee percentage for Bybit.")
+        fee_percentage_bybit = 0.055  # default value in case of invalid input
 
-    if exchange == "Bybit":
-        websocket_manager.set_symbol(selected_symbol)  # Update this line
-        websocket_manager.data_event.clear()  # Clear the event before starting
-        websocket_manager.start()
-        websocket_manager.data_event.wait(1)  # Wait for up to 10 seconds for the event to be set
-        order_book = websocket_manager.get_order_book()
-        websocket_manager.stop()
-    elif exchange == "Woo Network":
-        order_book = fetch_order_book(selected_symbol)
+with col3:
+    # Binance Exchange UI
+    st.write("### Binance Futures")
+    selected_symbol_binance = st.selectbox("Select a trading pair:", binance_pairs, key="binance_select")
+    order_size_binance = st.number_input("Enter Order Size ($):", value=5000.0, min_value=0.0, step=100.0, key="binance_order_size")
 
-    # If order book fetch is successful, display it
-    if order_book and 'bids' in order_book and 'asks' in order_book:
-        top_n = 10  # Show top 10 bids and asks
-        bids_data = order_book['bids'][:top_n]
-        asks_data = order_book['asks'][:top_n]
+    fee_input_binance = st.text_input("Taker Fee (%):", value="0.04", key="binance_fee")
+    try:
+        fee_percentage_binance = float(fee_input_binance)
+    except ValueError:
+        st.warning("Please enter a valid fee percentage for Binance.")
+        fee_percentage_binance = 0.04  # default value in case of invalid input
 
-        with st.expander("Live Order Book", expanded=False):
-            col1, col2 = st.columns(2)
+# Combined button for both exchanges
+if st.button('Simulate Market Buys for Both Exchanges'):
+    # Woo Network
+    order_book_woo = fetch_order_book(selected_symbol_woo)
+    with col1:
+        display_order_book_results(order_book_woo, order_size_woo, fee_percentage_woo)
 
-            with col1:
-                st.write("Bids")
-                st.table(bids_data)
+    # Bybit
+    websocket_manager.set_symbol(selected_symbol_bybit)
+    websocket_manager.data_event.clear()
+    websocket_manager.start()
+    websocket_manager.data_event.wait(1)
+    order_book_bybit = websocket_manager.get_order_book()
+    websocket_manager.stop()
+    with col2:
+        display_order_book_results(order_book_bybit, order_size_bybit, fee_percentage_bybit)
 
-            with col2:
-                st.write("Asks")
-                st.table(asks_data)
-
-        last_traded_price = order_book['bids'][0]['price']
-        bought_quantity, avg_price = simulate_market_buy(order_book, order_size)
-
-        lowest_ask_price = order_book['asks'][0]['price']
-        spread = lowest_ask_price - last_traded_price
-
-        # Calculate slippage
-        slippage = avg_price - last_traded_price
-
-        # Calculate fee amount
-        fee_amount = (fee_percentage / 100) * order_size
-
-        # Adjusting the slippage and spread calculations
-        total_slippage_cost = slippage * bought_quantity
-        total_spread_cost = spread * bought_quantity
-        total_cost = fee_amount + total_slippage_cost + total_spread_cost
-
-        # Display the results
-        st.write(f'Quantity Bought: {round(bought_quantity, 3)}')
-        st.write(f'Average Price: ${round(avg_price, 4)}')
-        st.write(f'Total Slippage Cost: ${round(total_slippage_cost, 6)}')
-        st.write(f'Fee Amount: ${fee_amount}')
-        st.write(f'Total Spread Cost: ${round(total_spread_cost, 6)}')
-        st.markdown(f'**Total Cost of Trade: ${round(total_cost, 6)}**')
-    else:
-        st.write("Failed to fetch or display the order book.")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    order_book_binance = fetch_binance_order_book(selected_symbol_binance)
+    with col3:
+        display_order_book_results(order_book_binance, order_size_binance, fee_percentage_binance)
