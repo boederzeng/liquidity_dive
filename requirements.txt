@@ -2,4 +2,4 @@ requests
 streamlit
 ccxt
 pandas
-
+pybit
