@@ -1,4 +1,6 @@
-streamlit
-pybit
 requests
+time
+streamlit
+ccxt
+pandas
 
