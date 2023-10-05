@@ -10,7 +10,7 @@ def fetch_binance_order_book(symbol='BTCUSDT'):
     binance = ccxt.binance({
         'rateLimit': 1200,
         'enableRateLimit': True,
-        'options': {'defaultType': 'future'},
+        'options': {'defaultType': 'swap'},
     })
     order_book = binance.fetch_order_book(symbol)
     if not order_book:
@@ -22,7 +22,17 @@ def fetch_binance_order_book(symbol='BTCUSDT'):
     }
     return formatted_order_book
 
+def fetch_binance_swap_pairs():
+    binance = ccxt.binance({
+        'rateLimit': 1200,
+        'enableRateLimit': True,
+        'options': {'defaultType': 'swap'},
+    })
+    markets = binance.fetch_markets()
+    binance_pairs = [market['symbol'] for market in markets if market['info'].get('contractType') == 'PERPETUAL']
+    return binance_pairs
 
+binance_pairs = fetch_binance_swap_pairs()
 
 
 RATE_LIMIT_REQUESTS = 10
@@ -34,6 +44,7 @@ def fetch_bybit_order_book(symbol='BTC/USD'):
     bybit = ccxt.bybit({
         'rateLimit': 1200,
         'enableRateLimit': True,
+        'options': {'defaultType': 'swap'},
     })
     order_book = bybit.fetch_order_book(symbol)
     if not order_book:
@@ -52,6 +63,7 @@ def fetch_woo_order_book(symbol='BTC/USDT'):
     woo = ccxt.woo({
         'rateLimit': 1200,
         'enableRateLimit': True,
+        'options': {'defaultType': 'swap'},
     })
     order_book = woo.fetch_order_book(symbol)
     if not order_book:
@@ -62,6 +74,23 @@ def fetch_woo_order_book(symbol='BTC/USDT'):
         'asks': [{'price': float(price), 'quantity': float(quantity)} for price, quantity in order_book['asks']],
     }
     return formatted_order_book
+
+def fetch_okex_order_book(symbol='BTC-USDT-SWAP'):
+    okex = ccxt.okex({
+        'rateLimit': 1200,
+        'enableRateLimit': True,
+        'options': {'defaultType': 'swap'},
+    })
+    order_book = okex.fetch_order_book(symbol)
+    if not order_book:
+        return {"success": False, "error": "Failed to fetch data from OKEx."}
+
+    formatted_order_book = {
+        'bids': [{'price': float(price), 'quantity': float(quantity)} for price, quantity in order_book['bids']],
+        'asks': [{'price': float(price), 'quantity': float(quantity)} for price, quantity in order_book['asks']],
+    }
+    return formatted_order_book
+
 
 
 def display_order_book_results(order_book, order_size, fee_percentage):
@@ -153,13 +182,14 @@ with open("woox_pairs.txt", "r") as file:
 
 with open("bybit_perps.txt", "r") as file:
     bybit_pairs = [pair.strip() for pair in file.readlines()]
-with open("binance_perps.txt", "r") as file:
-    binance_pairs = [pair.strip() for pair in file.readlines()]
+
+with open("okex_perps.txt", "r") as file:
+        okex_pairs = [pair.strip() for pair in file.readlines()]
 
 # Streamlit UI
 st.title('Market Buy Simulator')
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     # Woo Network Exchange UI
@@ -168,7 +198,7 @@ with col1:
     order_size_woo = st.number_input("Enter Order Size ($):", value=5000.0, min_value=0.0, step=100.0,
                                      key="woo_order_size")
 
-    fee_input_woo = st.text_input("Taker Fee (%):", value="0.015", key="woo_fee")
+    fee_input_woo = st.text_input("Taker Fee (%):", value="0.03", key="woo_fee")
     try:
         fee_percentage_woo = float(fee_input_woo)
     except ValueError:
@@ -189,7 +219,7 @@ with col2:
 
 with col3:
     # Binance Exchange UI
-    st.write("### Binance Futures")
+    st.write("### BinFu")
     selected_symbol_binance = st.selectbox("Select a trading pair:", binance_pairs, key="binance_select")
     order_size_binance = st.number_input("Enter Order Size ($):", value=5000.0, min_value=0.0, step=100.0, key="binance_order_size")
 
@@ -200,8 +230,19 @@ with col3:
         st.warning("Please enter a valid fee percentage for Binance.")
         fee_percentage_binance = 0.04  # default value in case of invalid input
 
+with col4:
+    st.write("### OKEx")
+    selected_symbol_okex = st.selectbox("Select a trading pair:", okex_pairs, key="okex_select")
+    order_size_okex = st.number_input("Enter Order Size ($):", value=5000.0, min_value=0.0, step=100.0, key="okex_order_size")
+    fee_input_okex = st.text_input("Taker Fee (%):", value="0.06", key="okex_fee")
+    try:
+        fee_percentage_okex = float(fee_input_okex)
+    except ValueError:
+        st.warning("Please enter a valid fee percentage for OKEx.")
+        fee_percentage_okex = 0.06  # default value in case of invalid input
+
 # Combined button for both exchanges
-if st.button('Simulate Market Buys for Both Exchanges'):
+if st.button('Simulate Market Buys'):
     # Woo Network
     order_book_woo = fetch_woo_order_book(selected_symbol_woo)
     with col1:
@@ -217,4 +258,12 @@ if st.button('Simulate Market Buys for Both Exchanges'):
     order_book_binance = fetch_binance_order_book(selected_symbol_binance)
     with col3:
         display_order_book_results(order_book_binance, order_size_binance, fee_percentage_binance)
+
+    # OkeX
+    order_book_okex = fetch_okex_order_book(selected_symbol_okex)
+    with col4:
+        display_order_book_results(order_book_okex, order_size_okex, fee_percentage_okex)
+
+
+
 
