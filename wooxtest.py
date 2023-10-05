@@ -3,7 +3,7 @@ import time
 import streamlit as st
 import ccxt
 import pandas as pd
-from pybit.unified_trading import HTTP
+#from pybit.unified_trading import HTTP
 
 
 def fetch_binance_order_book(symbol='BTCUSDT'):
